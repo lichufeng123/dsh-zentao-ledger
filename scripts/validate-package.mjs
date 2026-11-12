@@ -1,0 +1,36 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+const root = path.resolve(import.meta.dirname, '..');
+const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+assert.equal(pkg.name, 'dsh-zentao-ledger');
+assert.equal(pkg.private, undefined);
+assert.equal(pkg.license, 'MIT');
+assert.ok(pkg.repository.url.startsWith('git+https://github.com/'));
+assert.ok(fs.existsSync(path.join(root, pkg.dsh.bundle.patch)));
+const packed = JSON.parse(execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }))[0];
+for (const file of packed.files) {
+  assert.ok(!/(^|\/)(\.ai-test|\.env|\.npmrc|node_modules|evidence|dist)(\/|$)/.test(file.path), `Private runtime path: ${file.path}`);
+  assert.ok(!/\.(png|jpe?g|webp|gif|mp4|webm|pdf|tgz)$/i.test(file.path), `Unexpected media/archive: ${file.path}`);
+  const text = fs.readFileSync(path.join(root, file.path), 'utf8');
+  assert.ok(!/-----BEGIN (?:[A-Z ]+)?PRIVATE KEY-----/.test(text), `Private key: ${file.path}`);
+  assert.ok(!/(?:ghp|github_pat|npm)_[A-Za-z0-9]{30,}/.test(text), `Credential-like string: ${file.path}`);
+  assert.ok(!/\/Users\/[^/]+\//.test(text), `Personal absolute path: ${file.path}`);
+}
+const { Config, createHost } = await import('../index.js');
+const config = Config({});
+assert.equal(config.origin, '');
+assert.equal(config.productId, '');
+assert.equal(config.projectId, '');
+assert.equal(config.ai.enabled, false);
+let calls = 0;
+const host = createHost({ credentials: { describeRecord: async () => ({ configured: false }), readRecord: async () => undefined } }, { config, transport: async () => { calls++; throw new Error('No external network allowed'); } });
+const response = await host.rpc(new Request('http://localhost/api/zentao-ledger/rpc', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method: 'status' }) }));
+const status = await response.json();
+assert.equal(status.ok, true);
+assert.equal(status.value.configured, false);
+assert.equal(status.value.site.configured, false);
+assert.equal(calls, 0);
+for (const file of ['README.md', 'README.zh-CN.md', 'docs/configuration.md', 'SECURITY.md', 'CONTRIBUTING.md', 'LICENSE']) assert.ok(fs.existsSync(path.join(root, file)));
+console.log(JSON.stringify({ package: pkg.name, version: pkg.version, packageFiles: packed.files.length, emptyConfigNetworkRequests: calls, aiDefault: 'disabled', privateInstallModified: false }));
